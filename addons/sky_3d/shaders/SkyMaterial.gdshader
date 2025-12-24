@@ -39,6 +39,13 @@ uniform bool moon_texture_flip_u;
 uniform bool moon_texture_flip_v;
 uniform float moon_size = 0.07;
 
+// Optional override for moon lighting direction.
+// Sky3D normally shades the moon using the sun DirectionalLight's direction.
+// If you want to control the moon phase independently, a script can enable this
+// and provide an alternate light direction.
+uniform bool moon_phase_override = false;
+uniform vec3 moon_phase_light_dir = vec3(0.0, 1.0, 0.0);
+
 group_uniforms moon_mie;
 uniform vec4 atm_moon_mie_tint: source_color = vec4(0.137, 0.184, 0.292, 1.0);
 uniform float atm_moon_mie_intensity = 0.17152;
@@ -359,7 +366,14 @@ vec3 render_sky(vec3 world_pos, vec3 clouds_pos, vec3 sun_pos, vec3 moon_pos, fl
 	float moon_mask = moon_intersect > (-1. + sqrt(moon_size)) ? 1.0 : 0.0;
 	vec3 moon_normal = normalize(world_pos * moon_intersect - moon_pos);
 
-	float moon_ndotl = clamp(dot(moon_normal, sun_pos), 0.0, 1.0);
+	// Moon phase shading.
+	// Default uses the sun's direction. If overridden, use the provided direction.
+	vec3 moon_light_dir = sun_pos;
+	if (moon_phase_override) {
+		moon_light_dir = normalize(moon_phase_light_dir);
+	}
+	
+	float moon_ndotl = clamp(dot(moon_normal, moon_light_dir), 0.0, 1.0);
 	vec3 moon_tex = sample_moon_texture(moon_normal);
 	vec3 moon_output = moon_mask * moon_ndotl * exp2(1.0) * moon_tex * moon_color.rgb;
 	float moonMask = (1.0 - moon_mask);

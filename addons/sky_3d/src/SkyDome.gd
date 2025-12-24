@@ -257,6 +257,7 @@ func _update_sun_coords() -> void:
 	fog_material.set_shader_parameter("sun_direction", _sun_transform.origin)
 	if _sun_light_node:
 		_sun_light_node.transform = _sun_transform
+	_update_moon_phase_params()
 	
 	_set_day_state(sun_altitude)
 	_update_night_intensity()
@@ -423,6 +424,7 @@ func update_moon_coords() -> void:
 	fog_material.set_shader_parameter("moon_direction", _moon_transform.origin)
 	if _moon_light_node:
 		_moon_light_node.transform = _moon_transform
+	_update_moon_phase_params()
 	
 	_moon_light_altitude_mult = clampf(_moon_transform.origin.y, 0.0, 1.0)
 	
@@ -439,6 +441,62 @@ func _update_moon_texture() -> void:
 		sky_material.set_shader_parameter("moon_texture_alignment", moon_texture_alignment)
 		sky_material.set_shader_parameter("moon_texture_flip_u", flip_moon_texture_u)
 		sky_material.set_shader_parameter("moon_texture_flip_v", flip_moon_texture_v)
+
+## Convenience helper mirroring UDS-style usage:
+## Call this to switch to manual mode and set a phase value.
+func set_moon_phase_from_fraction(phase_fraction: float, waxing: bool = true) -> void:
+	moon_phase_mode = MoonPhaseMode.MANUAL
+	moon_phase_waxing = waxing
+	moon_phase = phase_fraction
+
+
+func _get_effective_moon_phase_light_dir() -> Vector3:
+	if moon_phase_mode == MoonPhaseMode.MANUAL:
+		return _compute_manual_moon_phase_light_dir()
+	return _sun_transform.origin.normalized()
+
+
+func _compute_manual_moon_phase_light_dir() -> Vector3:
+	# Build a stable tangent basis around the current moon direction.
+	var moon_dir: Vector3 = _moon_transform.origin.normalized()
+
+	var base: Vector3 = Vector3.UP
+	if absf(base.dot(moon_dir)) > 0.98:
+		base = Vector3.RIGHT
+
+	# Tangent in plane perpendicular to moon_dir
+	var tangent: Vector3 = (base - moon_dir * base.dot(moon_dir)).normalized()
+	var bitangent: Vector3 = moon_dir.cross(tangent).normalized()
+
+	# Apply user-controlled rotation around moon_dir
+	var rot: float = deg_to_rad(moon_phase_rotation_deg)
+	var tangent_rot: Vector3 = (tangent * cos(rot) + bitangent * sin(rot)).normalized()
+
+	# Waxing/waning flips which side grows
+	if not moon_phase_waxing:
+		tangent_rot = -tangent_rot
+
+	# Rotate moon_dir towards tangent_rot by the desired phase angle.
+	var theta: float = moon_phase * TAU
+	var dir: Vector3 = moon_dir * cos(theta) + tangent_rot * sin(theta)
+	return dir.normalized()
+
+
+## 0..1 illumination fraction (0 = new moon, 1 = full moon).
+func _moon_illumination_fraction() -> float:
+	var moon_dir: Vector3 = _moon_transform.origin.normalized()
+	var light_dir: Vector3 = _get_effective_moon_phase_light_dir()
+	var d: float = clampf(moon_dir.dot(light_dir), -1.0, 1.0)
+	return clampf((1.0 - d) * 0.5, 0.0, 1.0)
+
+
+## Push moon-phase-related params into the sky shader.
+func _update_moon_phase_params() -> void:
+	if not is_scene_built:
+		return
+	var use_override: bool = (moon_phase_mode == MoonPhaseMode.MANUAL)
+	sky_material.set_shader_parameter("moon_phase_override", use_override)
+	sky_material.set_shader_parameter("moon_phase_light_dir", _get_effective_moon_phase_light_dir())
 
 
 #####################
@@ -479,6 +537,8 @@ func _update_moon_light_energy() -> void:
 	
 	var l: float = lerpf(0.0, moon_light_energy, _moon_light_altitude_mult)
 	l *= _atm_moon_phases_mult()
+	if moon_phase_affects_light:
+		l *= _moon_illumination_fraction()
 	
 	var fade: float = (1.0 - _sun_transform.origin.y) * 0.5
 	_moon_light_node.light_energy = l * SUN_MOON_CURVE.sample_baked(fade)
@@ -496,6 +556,54 @@ func _update_moon_light_energy() -> void:
 		if moon_light_path:
 			_moon_light_node = get_node_or_null(moon_light_path) as DirectionalLight3D
 		update_moon_coords()
+
+@export_subgroup("Moon Phase")
+
+
+## Controls how moon phases are computed.
+## - Auto: Uses the actual SunLight direction (physically derived from sun/moon positions).
+## - Manual: Uses the [member moon_phase] slider to shade the moon independently of the sun.
+enum MoonPhaseMode { AUTO, MANUAL }
+
+
+## Selects whether the moon phase is computed automatically or manually overridden.
+@export var moon_phase_mode: MoonPhaseMode = MoonPhaseMode.AUTO:
+	set(value):
+		moon_phase_mode = value
+		_update_moon_phase_params()
+
+
+## Moon phase as a fraction of the synodic month.
+## 0.0 = New, 0.25 = First Quarter, 0.5 = Full, 0.75 = Last Quarter, 1.0 wraps to New.
+@export_range(0.0, 1.0, 0.001) var moon_phase: float = 0.5:
+	set(value):
+		moon_phase = fposmod(value, 1.0)
+		_update_moon_phase_params()
+		_update_moon_light_energy()
+
+
+## Rotates the phase terminator around the moon disk.
+## 0° uses the default orientation; 90° turns it a quarter turn, etc.
+@export_range(-180.0, 180.0, 0.1) var moon_phase_rotation_deg: float = 0.0:
+	set(value):
+		moon_phase_rotation_deg = value
+		_update_moon_phase_params()
+
+
+## If true, the manual phase will appear "waxing" (lit grows on the right in the default orientation).
+## If false, the manual phase will appear "waning".
+@export var moon_phase_waxing: bool = true:
+	set(value):
+		moon_phase_waxing = value
+		_update_moon_phase_params()
+
+
+## When enabled, the MoonLight energy is also scaled by the moon's illumination fraction.
+## (The shader already renders the visible phase on the disk; this makes the directional light match.)
+@export var moon_phase_affects_light: bool = true:
+	set(value):
+		moon_phase_affects_light = value
+		_update_moon_light_energy()
 
 
 #####################
