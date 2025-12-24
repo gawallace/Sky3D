@@ -12,3 +12,6 @@ data_*/
 
 # OS Ignores
 .DS_Store
+
+#vscode ignores
+.vscode/
