@@ -263,6 +263,7 @@ func _update_sun_coords() -> void:
 	_update_night_intensity()
 	_update_sun_light_color()
 	_update_sun_light_energy()
+	_update_moon_phase_params()
 	_update_moon_light_energy()
 	_update_ambient_color()
 
@@ -430,6 +431,7 @@ func update_moon_coords() -> void:
 	
 	_update_night_intensity()
 	_update_moon_light_color()
+	_update_moon_phase_params()
 	_update_moon_light_energy()
 	_update_ambient_color()
 
@@ -442,7 +444,7 @@ func _update_moon_texture() -> void:
 		sky_material.set_shader_parameter("moon_texture_flip_u", flip_moon_texture_u)
 		sky_material.set_shader_parameter("moon_texture_flip_v", flip_moon_texture_v)
 
-## Convenience helper mirroring UDS-style usage:
+
 ## Call this to switch to manual mode and set a phase value.
 func set_moon_phase_from_fraction(phase_fraction: float, waxing: bool = true) -> void:
 	moon_phase_mode = MoonPhaseMode.MANUAL
@@ -451,9 +453,19 @@ func set_moon_phase_from_fraction(phase_fraction: float, waxing: bool = true) ->
 
 
 func _get_effective_moon_phase_light_dir() -> Vector3:
+	# In AUTO mode we use the SunLight direction for physically-derived phases.
+	# In MANUAL mode we compute a fake light direction so phase can be artistically controlled.
+	var dir: Vector3
 	if moon_phase_mode == MoonPhaseMode.MANUAL:
-		return _compute_manual_moon_phase_light_dir()
-	return _sun_transform.origin.normalized()
+		dir = _compute_manual_moon_phase_light_dir()
+	else:
+		dir = _sun_transform.origin.normalized()
+		# Artistic control: rotate the effective light direction around the moon's forward axis.
+		# This changes the terminator orientation without changing the illumination fraction.
+		if absf(moon_phase_rotation_deg) > 0.0001:
+			var moon_dir: Vector3 = _moon_transform.origin.normalized()
+			dir = dir.rotated(moon_dir, deg_to_rad(moon_phase_rotation_deg)).normalized()
+	return dir
 
 
 func _compute_manual_moon_phase_light_dir() -> Vector3:
@@ -494,9 +506,12 @@ func _moon_illumination_fraction() -> float:
 func _update_moon_phase_params() -> void:
 	if not is_scene_built:
 		return
-	var use_override: bool = (moon_phase_mode == MoonPhaseMode.MANUAL)
-	sky_material.set_shader_parameter("moon_phase_override", use_override)
+
+	var wants_override: bool = (moon_phase_mode == MoonPhaseMode.MANUAL) or (absf(moon_phase_rotation_deg) > 0.0001)
+
+	sky_material.set_shader_parameter("moon_phase_override", wants_override)
 	sky_material.set_shader_parameter("moon_phase_light_dir", _get_effective_moon_phase_light_dir())
+
 
 
 #####################
@@ -571,6 +586,7 @@ enum MoonPhaseMode { AUTO, MANUAL }
 	set(value):
 		moon_phase_mode = value
 		_update_moon_phase_params()
+		_update_moon_light_energy()
 
 
 ## Moon phase as a fraction of the synodic month.
